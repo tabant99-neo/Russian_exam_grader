@@ -5,268 +5,223 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from utils import load_model_resources
 import io
-import time
 import os
 
 # Настройка страницы
 st.set_page_config(
-    page_title="Оценка эссе",
+    page_title="Essay Grading System - Case Solution",
     page_icon="📝",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Загрузка модели (кэшируется)
+# Загрузка модели
 @st.cache_resource
 def load_model():
     return load_model_resources()
 
-def check_model_files():
-    """Проверка наличия файлов модели"""
-    model_dir = 'my_trained_model_2'
-    required_files = {
-        'model.safetensors': 'Основные веса модели',
-        'tokenizer.json': 'Токенизатор',
-        'tokenizer_config.json': 'Конфигурация токенизатора',
-        'special_tokens_map.json': 'Специальные токены',
-        'config.json': 'Конфигурация модели'
-    }
-    
-    missing_files = []
-    existing_files = []
-    
-    for file, description in required_files.items():
-        file_path = os.path.join(model_dir, file)
-        if os.path.exists(file_path):
-            existing_files.append((file, description, "✅"))
-        else:
-            missing_files.append((file, description, "❌"))
-    
-    return existing_files, missing_files
-
 def main():
-    st.title("📝 Система автоматической оценки эссе")
-    st.markdown("---")
+    st.title("🎯 Система оценки экзаменационных ответов")
+    st.markdown("""
+    Аналог Colab решения для автоматической оценки ответов на экзаменационные вопросы.
+    Загрузите CSV файл с транскрибациями ответов для получения оценок.
+    """)
     
-    # Проверка файлов модели
-    st.sidebar.title("Проверка модели")
-    existing_files, missing_files = check_model_files()
-    
-    st.sidebar.subheader("Найденные файлы:")
-    for file, description, status in existing_files:
-        st.sidebar.text(f"{status} {file}")
-    
-    if missing_files:
-        st.sidebar.subheader("Отсутствующие файлы:")
-        for file, description, status in missing_files:
-            st.sidebar.text(f"{status} {file}")
-        st.sidebar.error("Не все файлы модели найдены!")
-    else:
-        st.sidebar.success("Все файлы модели на месте!")
+    # Информация о системе
+    with st.sidebar:
+        st.header("📋 О системе")
+        st.markdown("""
+        **Критерии оценки:**
+        - Вопрос 1: 0-1 балл
+        - Вопрос 2: 0-2 балла  
+        - Вопрос 3: 0-1 балл
+        - Вопрос 4: 0-2 балла
+        
+        **Требования к файлу:**
+        - CSV формат
+        - Колонка с транскрибациями ответов
+        - Колонка с номерами вопросов (1-4)
+        """)
     
     # Загрузка модели
-    with st.spinner("Загрузка модели..."):
+    with st.spinner("Загрузка модели для оценки..."):
         grader = load_model()
     
     if grader is None:
-        st.error("""
-        ❌ Ошибка загрузки модели. Пожалуйста, проверьте:
-        1. Все ли файлы модели находятся в папке `my_trained_model_2/`
-        2. Правильные ли названия у файлов
-        3. Поддерживает ли модель архитектуру для sequence classification
-        """)
-        
-        st.info("""
-        🔍 **Необходимые файлы:**
-        - `model.safetensors` - веса модели
-        - `tokenizer.json` - токенизатор  
-        - `tokenizer_config.json` - конфиг токенизатора
-        - `special_tokens_map.json` - специальные токены
-        - `config.json` - конфигурация модели
-        """)
+        st.error("❌ Ошибка загрузки модели. Проверьте файлы модели в папке 'my_trained_model_2'")
         return
     
     st.success("✅ Модель успешно загружена!")
     
-    # Информация о модели
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Информация о модели")
-    st.sidebar.text(f"Тип: Transformers")
-    st.sidebar.text(f"Архитектура: {type(grader.model).__name__}")
-    st.sidebar.text(f"Токенизатор: {type(grader.tokenizer).__name__}")
-    
     # Основной интерфейс
-    tab1, tab2, tab3 = st.tabs(["📤 Загрузка файла", "✍️ Ручной ввод", "ℹ️ О системе"])
+    st.header("📤 Загрузка данных")
     
-    with tab1:
-        st.header("Загрузка CSV файла")
-        st.markdown("""
-        Загрузите CSV файл с эссе. Файл должен содержать колонку с текстом эссе.
-        После обработки вы сможете скачать файл с добавленными оценками.
-        """)
-        
-        uploaded_file = st.file_uploader("Выберите CSV файл", type=['csv'])
-        
-        if uploaded_file is not None:
-            try:
-                # Чтение файла
-                df = pd.read_csv(uploaded_file)
-                st.success(f"Файл успешно загружен! Размер: {df.shape}")
-                
-                # Выбор колонки с текстом
+    uploaded_file = st.file_uploader(
+        "Выберите CSV файл с экзаменационными данными", 
+        type=['csv'],
+        help="Файл должен содержать колонки с транскрибациями ответов и номерами вопросов"
+    )
+    
+    if uploaded_file is not None:
+        try:
+            # Чтение файла
+            df = pd.read_csv(uploaded_file, delimiter=';', encoding='utf-8')
+            st.success(f"Файл загружен! Найдено {len(df)} записей")
+            
+            # Показ структуры данных
+            st.subheader("Структура данных")
+            st.write(f"**Колонки:** {list(df.columns)}")
+            st.write(f"**Размер:** {df.shape}")
+            
+            # Предпросмотр данных
+            with st.expander("Предпросмотр данных"):
+                st.dataframe(df.head(10))
+            
+            # Выбор колонок
+            col1, col2 = st.columns(2)
+            
+            with col1:
                 text_column = st.selectbox(
-                    "Выберите колонку с текстом эссе",
+                    "Выберите колонку с транскрибациями ответов",
                     options=df.columns.tolist(),
-                    key="file_text_column"
+                    help="Колонка с текстом ответов студентов"
                 )
+            
+            with col2:
+                question_column = st.selectbox(
+                    "Выберите колонку с номерами вопросов",
+                    options=df.columns.tolist(),
+                    help="Колонка с номерами вопросов (1-4)"
+                )
+            
+            # Проверка данных
+            if text_column and question_column:
+                # Показ примеров данных
+                st.subheader("Проверка данных")
                 
-                if st.button("Оценить эссе", key="file_grade"):
-                    with st.spinner("Обработка эссе..."):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Пример транскрибации:**")
+                    sample_text = df[text_column].iloc[0] if len(df) > 0 else "Нет данных"
+                    st.text_area("", value=sample_text[:300] + "..." if len(str(sample_text)) > 300 else sample_text, 
+                               height=100, key="text_sample")
+                
+                with col2:
+                    st.write("**Распределение вопросов:**")
+                    question_counts = df[question_column].value_counts().sort_index()
+                    st.write(question_counts)
+                
+                # Кнопка запуска оценки
+                if st.button("🚀 Запустить оценку ответов", type="primary"):
+                    with st.spinner("Оцениваю ответы..."):
+                        # Подготовка данных
+                        texts = df[text_column].fillna('').astype(str).tolist()
+                        question_numbers = df[question_column].astype(int).tolist()
+                        
                         # Прогресс бар
                         progress_bar = st.progress(0)
+                        status_text = st.empty()
                         
-                        # Получение оценок
-                        essays = df[text_column].fillna('').astype(str).tolist()
-                        
-                        # Обработка чанками для больших файлов
-                        batch_size = 32
+                        # Обработка батчами как в Colab
+                        batch_size = 16
                         all_grades = []
                         
-                        for i in range(0, len(essays), batch_size):
-                            batch_essays = essays[i:i + batch_size]
-                            batch_grades = grader.predict_grades(batch_essays)
+                        total_batches = (len(texts) + batch_size - 1) // batch_size
+                        
+                        for i in range(0, len(texts), batch_size):
+                            batch_texts = texts[i:i + batch_size]
+                            batch_questions = question_numbers[i:i + batch_size]
+                            
+                            status_text.text(f"Обработка батча {i//batch_size + 1}/{total_batches}")
+                            
+                            batch_grades = grader.predict_grades(batch_texts, batch_questions)
                             all_grades.extend(batch_grades)
                             
-                            # Обновление прогресса
-                            progress = min((i + batch_size) / len(essays), 1.0)
-                            progress_bar.progress(progress)
+                            progress = (i + batch_size) / len(texts)
+                            progress_bar.progress(min(progress, 1.0))
                         
                         # Добавление оценок в DataFrame
-                        df['predicted_grade'] = all_grades
+                        df['predicted_score'] = all_grades
                         
-                        st.success(f"Обработано {len(essays)} эссе!")
+                        st.success(f"✅ Оценка завершена! Обработано {len(texts)} ответов")
                         
-                        # Показ результатов
-                        st.subheader("Результаты оценки")
+                        # Результаты
+                        st.header("📊 Результаты оценки")
                         
-                        col1, col2 = st.columns([2, 1])
+                        # Статистика
+                        col1, col2, col3, col4 = st.columns(4)
                         
                         with col1:
-                            st.dataframe(df[[text_column, 'predicted_grade']].head(10))
-                        
+                            st.metric("Средний балл", f"{df['predicted_score'].mean():.2f}")
                         with col2:
-                            st.metric("Средняя оценка", f"{df['predicted_grade'].mean():.2f}")
-                            st.metric("Макс. оценка", f"{df['predicted_grade'].max():.1f}")
-                            st.metric("Мин. оценка", f"{df['predicted_grade'].min():.1f}")
+                            st.metric("Максимальный балл", f"{df['predicted_score'].max()}")
+                        with col3:
+                            st.metric("Минимальный балл", f"{df['predicted_score'].min()}")
+                        with col4:
+                            st.metric("Всего ответов", len(df))
+                        
+                        # Детальная статистика по вопросам
+                        st.subheader("Статистика по вопросам")
+                        
+                        question_stats = df.groupby(question_column)['predicted_score'].agg([
+                            ('count', 'count'),
+                            ('mean_score', 'mean'),
+                            ('max_score', 'max'),
+                            ('min_score', 'min')
+                        ]).round(2)
+                        
+                        st.dataframe(question_stats)
                         
                         # Визуализация
-                        st.subheader("Визуализация результатов")
                         col1, col2 = st.columns(2)
                         
                         with col1:
                             fig, ax = plt.subplots(figsize=(10, 6))
-                            df['predicted_grade'].hist(bins=20, ax=ax, alpha=0.7)
+                            df['predicted_score'].hist(bins=20, ax=ax, alpha=0.7, color='#4CAF50')
                             ax.set_xlabel('Оценка')
-                            ax.set_ylabel('Количество')
+                            ax.set_ylabel('Количество ответов')
                             ax.set_title('Распределение оценок')
                             ax.grid(True, alpha=0.3)
                             st.pyplot(fig)
                         
                         with col2:
                             fig, ax = plt.subplots(figsize=(10, 6))
-                            grade_counts = df['predicted_grade'].value_counts().sort_index()
-                            grade_counts.plot(kind='bar', ax=ax, alpha=0.7)
-                            ax.set_xlabel('Оценка')
-                            ax.set_ylabel('Количество')
-                            ax.set_title('Частоты оценок')
+                            score_by_question = df.groupby(question_column)['predicted_score'].mean()
+                            score_by_question.plot(kind='bar', ax=ax, alpha=0.7, color='#2196F3')
+                            ax.set_xlabel('Номер вопроса')
+                            ax.set_ylabel('Средняя оценка')
+                            ax.set_title('Средние оценки по вопросам')
                             ax.grid(True, alpha=0.3)
-                            plt.xticks(rotation=45)
+                            plt.xticks(rotation=0)
                             st.pyplot(fig)
                         
-                        # Скачивание результата
-                        csv = df.to_csv(index=False)
+                        # Таблица с результатами
+                        st.subheader("Детальные результаты")
+                        results_df = df[[question_column, text_column, 'predicted_score']].copy()
+                        st.dataframe(results_df.head(20))
+                        
+                        # Скачивание результатов
+                        st.subheader("📥 Скачать результаты")
+                        
+                        csv = df.to_csv(index=False, sep=';', encoding='utf-8')
+                        
                         st.download_button(
-                            label="📥 Скачать результат CSV",
+                            label="Скачать CSV с оценками",
                             data=csv,
-                            file_name="essays_with_grades.csv",
+                            file_name="exam_results_with_scores.csv",
                             mime="text/csv",
-                            key="download_csv"
+                            help="Файл будет содержать исходные данные + колонку с предсказанными оценками"
                         )
-                        
-            except Exception as e:
-                st.error(f"Ошибка обработки файла: {e}")
-                st.info("Проверьте формат файла и кодировку (должен быть UTF-8)")
-    
-    with tab2:
-        st.header("Ручной ввод эссе")
-        st.markdown("Введите текст эссе для получения оценки")
-        
-        essay_text = st.text_area(
-            "Текст эссе",
-            height=300,
-            placeholder="Введите текст эссе здесь...",
-            key="manual_input"
-        )
-        
-        col1, col2 = st.columns([1, 3])
-        
-        with col1:
-            if st.button("Оценить эссе", key="manual_grade"):
-                if essay_text.strip():
-                    with st.spinner("Оценка эссе..."):
-                        grade = grader.predict_single_grade(essay_text)
-                        
-                        st.subheader("Результат оценки")
-                        
-                        # Красивое отображение оценки
-                        st.metric(
-                            label="Предсказанная оценка",
-                            value=f"{grade:.1f}",
-                            delta=f"из 10 баллов"
-                        )
-                        
-                        # Визуализация оценки
-                        fig, ax = plt.subplots(figsize=(10, 2))
-                        ax.barh([0], [grade], color='#4CAF50', alpha=0.7, height=0.5)
-                        ax.set_xlim(0, 10)
-                        ax.set_yticks([])
-                        ax.set_xlabel('Оценка')
-                        ax.set_title('Результат оценки')
-                        ax.axvline(x=grade, color='red', linestyle='--', alpha=0.8)
-                        ax.text(grade, 0, f' {grade:.1f}', ha='left', va='center', 
-                               fontweight='bold', fontsize=12, color='red')
-                        ax.grid(True, alpha=0.3)
-                        st.pyplot(fig)
-                        
-                else:
-                    st.warning("Пожалуйста, введите текст эссе")
-    
-    with tab3:
-        st.header("О системе")
-        st.markdown("""
-        ### 📊 Система автоматической оценки эссе
-        
-        Эта система использует передовые модели машинного обучения для автоматической 
-        оценки текстовых эссе на русском языке.
-        
-        **Возможности:**
-        - 📤 Пакетная обработка CSV файлов
-        - ✍️ Индивидуальная оценка эссе
-        - 📊 Визуализация результатов
-        - 📥 Экспорт результатов
-        
-        **Технические детали:**
-        - Модель: Fine-tuned Transformer
-        - Токенизатор: Предобученный BPE токенизатор
-        - Диапазон оценок: 1-10 баллов
-        - Поддержка: Русский язык
-        
-        **Использование:**
-        1. Загрузите CSV файл с колонкой текстов эссе
-        2. Выберите соответствующую колонку
-        3. Получите оценки и статистику
-        4. Скачайте результат
-        """)
+            
+        except Exception as e:
+            st.error(f"❌ Ошибка обработки файла: {e}")
+            st.info("""
+            **Возможные причины:**
+            - Неправильный разделитель (должен быть точкой с запятой)
+            - Неверная кодировка (должна быть UTF-8)
+            - Отсутствуют необходимые колонки
+            - Неправильный формат номеров вопросов
+            """)
 
 if __name__ == "__main__":
     main()
