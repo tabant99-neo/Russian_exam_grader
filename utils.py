@@ -2,141 +2,104 @@ import pandas as pd
 import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-import pickle
 import re
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import SnowballStemmer
-from typing import List, Union
-import os
+from typing import List
+import logging
 
-# Скачиваем необходимые данные NLTK
-try:
-    nltk.data.find('corpora/stopwords')
-except LookupError:
-    nltk.download('stopwords')
-
-class TextPreprocessor:
-    def __init__(self):
-        self.stemmer = SnowballStemmer("russian")
-        self.stop_words = set(stopwords.words('russian'))
-        self.stop_words.update(['это', 'вот', 'ну', 'бы', 'как', 'так', 'и', 'в', 'над', 'к', 'до', 'не', 'на', 'но', 'за', 'то', 'с', 'ли', 'а', 'во', 'от', 'со', 'для', 'о', 'же', 'ни', 'быть', 'он', 'say', 'said', 'would', 'could', 'should', 'the', 'a', 'an'])
-        
-    def clean_text(self, text):
-        if not isinstance(text, str):
-            return ""
-        
-        # Приведение к нижнему регистру
-        text = text.lower()
-        
-        # Удаление специальных символов и цифр
-        text = re.sub(r'[^а-яёa-z\s]', ' ', text)
-        text = re.sub(r'\s+', ' ', text)
-        
-        # Удаление стоп-слов и стемминг
-        words = text.split()
-        words = [self.stemmer.stem(word) for word in words if word not in self.stop_words and len(word) > 2]
-        
-        return ' '.join(words)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class EssayGrader:
     def __init__(self, model_path: str):
         self.model_path = model_path
-        self.preprocessor = TextPreprocessor()
-        
-        # Загрузка токенизатора и модели
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.load_model()
         
     def load_model(self):
-        """Загрузка модели и токенизатора"""
+        """Загрузка модели и токенизатора как в Colab"""
         try:
-            # Загрузка токенизатора
+            logger.info("Loading tokenizer...")
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
             
-            # Загрузка модели
+            logger.info("Loading model...")
             self.model = AutoModelForSequenceClassification.from_pretrained(
                 self.model_path,
                 torch_dtype=torch.float32
             )
             
-            # Переводим модель в режим оценки
+            self.model.to(self.device)
             self.model.eval()
             
-            print("Модель и токенизатор успешно загружены")
+            logger.info("Model loaded successfully")
             
         except Exception as e:
-            print(f"Ошибка загрузки модели: {e}")
+            logger.error(f"Error loading model: {e}")
             raise
     
-    def preprocess_essays(self, essays: List[str]) -> dict:
-        """Токенизация эссе"""
-        cleaned_essays = [self.preprocessor.clean_text(essay) for essay in essays]
+    def clean_text(self, text: str) -> str:
+        """Очистка текста как в Colab"""
+        if not isinstance(text, str):
+            return ""
         
-        # Токенизация с помощью transformers
-        inputs = self.tokenizer(
-            cleaned_essays,
-            padding=True,
-            truncation=True,
-            max_length=512,
-            return_tensors="pt"
-        )
+        # Удаление HTML тегов
+        text = re.sub(r'<[^>]+>', '', text)
         
-        return inputs
+        # Удаление специальных символов, оставляем только буквы, цифры и пунктуацию
+        text = re.sub(r'[^\w\s\.\,\!\?]', ' ', text)
+        
+        # Замена множественных пробелов
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip().lower()
     
-    def predict_grades(self, essays: List[str]) -> np.ndarray:
-        """Предсказание оценок для списка эссе"""
-        if len(essays) == 0:
+    def predict_grades(self, texts: List[str], question_numbers: List[int]) -> np.ndarray:
+        """Предсказание оценок как в Colab"""
+        if len(texts) == 0:
             return np.array([])
         
-        # Предобработка
-        inputs = self.preprocess_essays(essays)
-        
-        # Предсказание
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-            predictions = torch.softmax(outputs.logits, dim=1)
+        try:
+            # Очистка текстов
+            cleaned_texts = [self.clean_text(text) for text in texts]
             
-        # Предполагаем, что модель классифицирует на 10 классов (оценки 1-10)
-        # Если у вас регрессия, адаптируйте эту часть
-        if predictions.shape[1] == 1:
-            # Регрессия - нормализуем к 1-10
-            grades = (predictions.numpy().flatten() * 9 + 1).round(1)
-        else:
-            # Классификация - берем argmax + 1 для оценок 1-10
-            grades = (predictions.argmax(dim=1).numpy() + 1).astype(float)
-        
-        return grades
-    
-    def predict_single_grade(self, essay: str) -> float:
-        """Предсказание оценки для одного эссе"""
-        return self.predict_grades([essay])[0]
+            # Токенизация
+            inputs = self.tokenizer(
+                cleaned_texts,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt"
+            ).to(self.device)
+            
+            # Предсказание
+            with torch.no_grad():
+                outputs = self.model(**inputs)
+                predictions = torch.softmax(outputs.logits, dim=1)
+            
+            # Преобразование в оценки в зависимости от номера вопроса
+            grades = []
+            for i, pred in enumerate(predictions):
+                question_num = question_numbers[i]
+                if question_num in [1, 3]:  # Вопросы 1 и 3: 0-1 балл
+                    grade = pred.argmax().item()
+                    grade = min(grade, 1)  # Ограничиваем максимум 1 баллом
+                else:  # Вопросы 2 и 4: 0-2 балла
+                    grade = pred.argmax().item()
+                    grade = min(grade, 2)  # Ограничиваем максимум 2 баллами
+                grades.append(grade)
+            
+            return np.array(grades)
+            
+        except Exception as e:
+            logger.error(f"Prediction error: {e}")
+            # Возвращаем нулевые оценки в случае ошибки
+            return np.zeros(len(texts))
 
 def load_model_resources():
-    """Загрузка модели и ресурсов"""
+    """Загрузка модели"""
     try:
         model_path = 'my_trained_model_2'
-        
-        # Проверяем существование файлов модели
-        required_files = [
-            'model.safetensors',
-            'tokenizer.json', 
-            'tokenizer_config.json',
-            'special_tokens_map.json',
-            'config.json'
-        ]
-        
-        missing_files = []
-        for file in required_files:
-            file_path = os.path.join(model_path, file)
-            if not os.path.exists(file_path):
-                missing_files.append(file)
-        
-        if missing_files:
-            raise FileNotFoundError(f"Отсутствуют файлы модели: {missing_files}")
-        
         grader = EssayGrader(model_path)
         return grader
-        
     except Exception as e:
-        print(f"Ошибка загрузки модели: {e}")
+        logger.error(f"Error loading model resources: {e}")
         return None
